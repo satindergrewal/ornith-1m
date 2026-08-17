@@ -67,7 +67,7 @@ Landed on `ds4-ports` (not pushed to fleet):
 
 
 Still missing for MET:
-- Qwen3.8 27B 1M resident master + 20/50/100 `/fork` inherit (fill in progress on 20448; agents not run). That is the HTTP shared-pool certification for this model. Fill alone is not the bar.
+- Qwen3.8 27B 1M resident master: fill in progress on 20448 (~33% at last check). 20/50/100 `/fork` spray **skipped** (Satinder 2026-08-17 18:25 GST). 1M inherit **unverified**. `/fork` stays for practical use. No MET.
 - Metal batched decode (several sequences in one graph). Not `-np`. Not CUDA. Parked until the 1M `/fork` proof. Mac GPU only.
 - Radix auto-share (SGLang-style) later, on this same pool. `/fork` of a named master is the explicit share for now.
 - DSV4 Flash 0731 8k: named /fork HTTP proven on new binary HEAD a7359a75f (child cache_n=64 prompt_n=22 tokens_evaluated=86; unknown 400; n_gpu_blocks=192 no overcommit). Parallel /fork PASS on ab2507c5e (both inherit 128/139). Decode still single-width. Parked. Not 256k.
@@ -962,8 +962,8 @@ Never:
 
 ## Next slice
 
-1. Finish Qwen3.8 27B 1M named fill on 20448 (`qwen38-1m-master`).
-2. `/fork` 20, then 50, then 100. Inherit the 1M prefix. Master stays. No MET until that lands.
+1. Finish Qwen3.8 27B 1M named fill on 20448 (`qwen38-1m-master`) so he has a master to `/fork` in real use.
+2. 20/50/100 `/fork` spray skipped. 1M inherit unverified. No MET.
 3. Then Metal batched decode (multi-seq one graph). Not `-np`. Not CUDA. Not on this fill. Days if existing Metal FA packs; 1–3 weeks if new paged kernels.
 4. Radix auto-share later, same pool. Days (scheduler/CPU). Less than the Metal kernel. `/fork` stays explicit.
 
