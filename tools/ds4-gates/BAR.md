@@ -85,6 +85,13 @@ Still missing for MET:
 
 ## Dated notes
 
+### 2026-08-17 — /fork-required client is the wrong product
+
+- Satinder: harness talks stock chat/completions; multi-agent share is automatic at the API. Not Spock headers, not `/fork` from CC/OpenAI/Grok-Build.
+- Next cut: radix/auto prefix-share on `/v1/chat/completions`. `/fork` optional.
+- 28943 left up on 18140 for real use. No MET.
+
+
 ### 2026-08-17 — 1M fill aborted; inherit unverified
 
 - Satinder stopped verification. PID 20448 SIGINT. Last ~347k/1048320 (~33%), ~12 tok/s, ~8h in.
@@ -973,7 +980,7 @@ Never:
 1. 1M fill aborted. Inherit unverified. `/fork` for real use. No MET.
 2. 20/50/100 spray skipped.
 3. Then Metal batched decode (multi-seq one graph). Not `-np`. Not CUDA. Not on this fill. Days if existing Metal FA packs; 1–3 weeks if new paged kernels.
-4. Radix auto-share later, same pool. Days (scheduler/CPU). Less than the Metal kernel. `/fork` stays explicit.
+4. **Product:** stock `/v1/chat/completions` auto-shares matching prefixes (vLLM/SGLang). `/fork` is optional, not the client contract. Satinder 2026-08-17 18:35 GST.
 
 ## Daily models (these outrank the 19)
 
