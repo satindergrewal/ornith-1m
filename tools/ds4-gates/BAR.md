@@ -22,9 +22,9 @@ Decode may be single-width. Speed ≥ static is a later gate, not this one.
 Qwen3.8 27B only until Satinder says otherwise. DSV4 parked. Official item 1 is still a 256k–1M resident master.
 
 Live (not MET):
-- HEAD `440817162` PID 20448 port 18140. Q4_K_M, `-ctk q8_0 -ctv q8_0`, `-c 1048576` YaRN, `--kv-block-size 32`, `--kv-paged`, `-np 1`, `--fit off`. RSS ~66.8 GiB.
-- Pool 34502 blocks (n_ctx/bs + watermark + ubatch). Hello 200. 1M named fill `qwen38-1m-master` in progress (~18% / ~187k of 1048320 at last check). Then 20/50/100 `/fork`.
-- Scratch `.scratch-qwen-1m-q4-q8kv-bs32/`.
+- 1M fill **aborted** 2026-08-17 18:29 GST (Satinder). PID 20448 SIGINT. Port 18140 down.
+- Last progress ~347k / 1048320 (~33%). Hello 200, 1M prompt admitted, no crash. 1M inherit **unverified**. He will test `/fork` in real use.
+- 20/50/100 spray skipped. 8k/16k inherit still holds. No MET.
 
 
 Landed on `ds4-ports` (not pushed to fleet):
@@ -67,7 +67,7 @@ Landed on `ds4-ports` (not pushed to fleet):
 
 
 Still missing for MET:
-- Qwen3.8 27B 1M resident master: fill in progress on 20448 (~33% at last check). 20/50/100 `/fork` spray **skipped** (Satinder 2026-08-17 18:25 GST). 1M inherit **unverified**. `/fork` stays for practical use. No MET.
+- Qwen3.8 27B 1M: fill aborted at ~347k/1048320 (~33%). Admitted, no crash. Inherit **unverified**. Real-use `/fork` when he wants. 20/50/100 spray skipped. No MET.
 - Metal batched decode (several sequences in one graph). Not `-np`. Not CUDA. Parked until the 1M `/fork` proof. Mac GPU only.
 - Radix auto-share (SGLang-style) later, on this same pool. `/fork` of a named master is the explicit share for now.
 - DSV4 Flash 0731 8k: named /fork HTTP proven on new binary HEAD a7359a75f (child cache_n=64 prompt_n=22 tokens_evaluated=86; unknown 400; n_gpu_blocks=192 no overcommit). Parallel /fork PASS on ab2507c5e (both inherit 128/139). Decode still single-width. Parked. Not 256k.
@@ -84,6 +84,14 @@ Still missing for MET:
 - concurrent agents on a daily model as a usable serve (not a one-shot e2e)
 
 ## Dated notes
+
+### 2026-08-17 — 1M fill aborted; inherit unverified
+
+- Satinder stopped verification. PID 20448 SIGINT. Last ~347k/1048320 (~33%), ~12 tok/s, ~8h in.
+- Paged 1M launch + admit + Hello 200 stood. No 1M master parked. No 1M `/fork`.
+- 20/50/100 spray skipped. He will test in real use and report if it breaks.
+- 8k/16k inherit + QUEUE + leave + SWAP still hold. No MET.
+
 
 ### 2026-08-17 — Qwen-only 1M shared-pool plan (Satinder)
 
@@ -962,8 +970,8 @@ Never:
 
 ## Next slice
 
-1. Finish Qwen3.8 27B 1M named fill on 20448 (`qwen38-1m-master`) so he has a master to `/fork` in real use.
-2. 20/50/100 `/fork` spray skipped. 1M inherit unverified. No MET.
+1. 1M fill aborted. Inherit unverified. `/fork` for real use. No MET.
+2. 20/50/100 spray skipped.
 3. Then Metal batched decode (multi-seq one graph). Not `-np`. Not CUDA. Not on this fill. Days if existing Metal FA packs; 1–3 weeks if new paged kernels.
 4. Radix auto-share later, same pool. Days (scheduler/CPU). Less than the Metal kernel. `/fork` stays explicit.
 
