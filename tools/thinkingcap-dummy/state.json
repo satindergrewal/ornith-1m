@@ -1,0 +1,52 @@
+{
+  "cycle": "thinkingcap-dummy-nano-dsv4-vision",
+  "design": "DESIGN.md",
+  "runbook": "RUNBOOK.md",
+  "box_workdir": "/mnt/t5evo/thinkingcap-dummy",
+  "updated_utc": "2026-09-02T08:05:00Z",
+  "steps": [
+    {
+      "id": "01_synth",
+      "status": "done",
+      "date": "2026-09-02",
+      "script": "01_synth.py",
+      "artifact": "/mnt/t5evo/thinkingcap-dummy/nano-dsv4-vision",
+      "receipt": {
+        "tensors": 619,
+        "params_M": 79.04,
+        "size_MB": 151,
+        "shards": 1,
+        "seed": 20260902,
+        "shard_sha256_16": "7a4ebf20b8a0be05",
+        "window": "real layers 10-13 (L0=10, same as 01b arm)",
+        "real_names": 72633,
+        "coverage": "all kept names mapped; skips are by-design index skips",
+        "mapped_by_prefix": {"aligner": 4, "embed": 1, "hc_head": 3, "head": 1, "image_tokens": 4, "layers": 330, "mtp": 229, "norm": 1, "vision": 19}
+      }
+    },
+    {
+      "id": "01b_synth_from_ablit",
+      "status": "done",
+      "date": "2026-09-03",
+      "script": "01b_synth_from_ablit.py",
+      "mainline": true,
+      "source": "/mnt/t5evo/dsv4-vision-ablit",
+      "artifact": "/mnt/t5evo/thinkingcap-dummy/nano-dsv4-vision-ablit",
+      "receipt": {
+        "tensors": 619,
+        "shards": 1,
+        "name_set_identical_to_stock_arm": true,
+        "layer_window": "real 10-13 (carries drowzeys wo_b edit)",
+        "fp8_dequant": "block-wise 128 / per-row / scalar scales",
+        "wo_b_slice_absmean": 0.0156
+      }
+    },
+    {"id": "02_ablit_direction", "status": "optional-ab-arm", "script": "02_ablit_direction.py"},
+    {"id": "03_regen_data", "status": "todo", "script": "03_regen_data.py"},
+    {"id": "04_train", "status": "todo", "script": "04_train.py", "needs_gpu": true},
+    {"id": "05_merge", "status": "todo", "script": "05_merge.py"},
+    {"id": "06_reencode", "status": "todo", "script": "06_reencode.py", "needs_gpu": true},
+    {"id": "07_gates", "status": "todo", "script": "07_gates.py", "needs_gpu": true}
+  ],
+  "resume": "first step with status != done; read RUNBOOK.md"
+}
