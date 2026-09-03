@@ -48,19 +48,27 @@ self-abliteration leaves the critical path.
    stock nano (wo_b projection, L10-35, lambda 3.5, 26 tensors,
    drowzeys method). Needed only for the cap-then-ablit vs
    cap-on-ablit ordering experiment; NOT on the critical path.
-3. **03_regen_data.py — TODO.** Hotdogs-method on-policy regen:
-   grade-school arithmetic, 3 samples from CURRENT base, oracle filter,
-   shortest-correct SFT set + short-vs-verbose DPO pairs.
-4. **04_train.py — TODO.** LoRA on nano (language + expert layers; vision
-   tower + nextn FROZEN — drafter-anchor lesson). Needs GPU: coordinate
-   with product serve on :8012 (Satinder gave start/stop authority this
-   session; restore after).
-5. **05_merge.py — TODO.** LoRA -> merged BF16 checkpoint.
-6. **06_reencode.py — TODO.** ModelOpt FP8/NVFP4-experts quant on the 6000s
-   (the BF16-LMHead fix lane proved this toolchain here). GPU step.
-7. **07_gates.py — TODO.** Bake-serve merged nano on the day-0 vLLM image;
-   greedy-equivalence, DSpark acceptance through the 3-layer nextn,
-   loop_eval, stock-vs-knob-vs-cap 3-arm. GPU step.
+3. **03_regen_data.py — DONE (2026-09-04).** 0/100 on-policy correct
+   (dummy, as designed); 100-row off-policy teacher topup, flagged.
+4. **04_train.py — DONE (2026-09-04).** LoRA via nano_torch autograd,
+   24 adapters / 74,240 params; loss 12.06->11.88 (flat = expected).
+   **04b_eval.py — DONE (his pre-merge ask): adapters apply in-memory,
+   generate clean, probe drift 4.771.**
+5. **05_merge.py — DONE (2026-09-04).** 24 tensors merged into
+   nano-dsv4-vision-ablit-cap; merged-vs-base probe maxdiff 4.771 ==
+   adapter-applied value = bit parity. MERGE_META.json receipt.
+6. **06_reencode.py — OPTIONAL for the dummy** (real run: ModelOpt
+   FP8/NVFP4-experts; the dummy is already BF16 float).
+7. **07_gates.py — REAL-RUN LANE (dummy covered its merge mechanics).
+   Real run next: (a) GPU adaptation of nano_torch for the full
+   drowzeys model (43L/128 experts/FP8) - layer-streamed on ONE Spark
+   (128GB unified); (b) real 03 data regen on-policy; (c) LoRA;
+   (d) merge into raw; (e) vLLM whole-model serve + before/after
+   reasoning-token/correctness bench (official ThinkingCap method).
+   Loop-check gate: stock vs capped reasoning length at equal quality.
+
+## 2026-09-04 status: DUMMY CYCLE COMPLETE (01b->05). Real run = the
+Spark lane above; hotdogs Qwen mixed-quant campaign queued AFTER it.
 
 ## Resume protocol
 
