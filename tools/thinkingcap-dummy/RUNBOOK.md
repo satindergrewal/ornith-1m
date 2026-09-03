@@ -76,6 +76,17 @@ self-abliteration leaves the critical path.
 
 ## Gotchas banked so far
 
+- STACK PIVOT (2026-09-03): transformers 5.16's deepseek_v4 class is a
+  DIFFERENT parameterization from the raw checkpoint (rope rows split
+  out of q_b/kv projections, compressor uses 2*head_dim direct projs
+  instead of the lora-compressed 512+64 layout, hc params expanded via
+  hashing, no MTP/vision at all). Raw->HF conversion (01c_to_hf_names.py)
+  got 98 language tensors name-mapped but shapes cannot match without a
+  lossy re-projection. 01c is therefore OPTIONAL/curiosity; the dummy's
+  engine is nano_torch.py (pure torch, raw names, mirrors
+  exllamav3/modules/dsv4.py math; CPU-capable; used by 03/04/05).
+  exllamav3 on the 5090 (post-handover) is the independent engine for
+  the 07 greedy-equivalence gate.
 - 01_synth.py reads WD from env SYNTH_WD (default /wd = the container
   mount). Do NOT hardcode host paths inside container scripts.
 - Shape tables are the source of truth for coverage; a falsy shape ()
