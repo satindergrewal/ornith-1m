@@ -86,9 +86,20 @@
   },
   {
    "id": "06_reencode",
-   "status": "todo",
+   "status": "optional-dummy-bf16",
    "script": "06_reencode.py",
    "needs_gpu": true
+  },
+  {
+   "id": "06_ab_bench",
+   "status": "done",
+   "date": "2026-09-05",
+   "script": "06_ab_bench.py",
+   "venue": "LilMonkey ~/thinkingcap-dummy (CPU venv)",
+   "receipt": {
+    "note": "his demand: A/B on OUR dummy. base vs MERGED cap artifact; 30/30 + 2/2 open diverge at token 0; logits maxdiff 6.52; lengths equal (budget-capped); 0/30 correct both arms (rehearsal slice)",
+    "artifact": "/home/satinder/thinkingcap-dummy/cap/ab_bench.json"
+   }
   },
   {
    "id": "07_gates",

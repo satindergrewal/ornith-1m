@@ -57,8 +57,16 @@ self-abliteration leaves the critical path.
 5. **05_merge.py — DONE (2026-09-04).** 24 tensors merged into
    nano-dsv4-vision-ablit-cap; merged-vs-base probe maxdiff 4.771 ==
    adapter-applied value = bit parity. MERGE_META.json receipt.
-6. **06_reencode.py — OPTIONAL for the dummy** (real run: ModelOpt
-   FP8/NVFP4-experts; the dummy is already BF16 float).
+6. **06_ab_bench.py — DONE (2026-09-05, his demand: test OUR dummy work).**
+   Base (nano-dsv4-vision-ablit) vs the MERGED cap artifact
+   (nano-dsv4-vision-ablit-cap), greedy, 160/256-token budgets.
+   RESULTS (cap/ab_bench.json on LilMonkey): 30/30 math + 2/2 open
+   prompts diverge at token 0; logits maxdiff 6.52; identical_streams 0.
+   Lengths equal (all budget-capped, no EOS — the 79M slice has no
+   arithmetic skill, 0/30 both arms; mechanism rehearsal, not quality).
+   Base text loops immediately ("dátummal" x13); cap soup differs with
+   far less concentrated repetition. THE receipt that 01b->05 produces
+   a model that demonstrably differs from base.
 7. **07_gates.py — REAL-RUN LANE (dummy covered its merge mechanics).
    Real run next: (a) GPU adaptation of nano_torch for the full
    drowzeys model (43L/128 experts/FP8) - layer-streamed on ONE Spark
@@ -84,6 +92,14 @@ Spark lane above; hotdogs Qwen mixed-quant campaign queued AFTER it.
 
 ## Gotchas banked so far
 
+- REAL-RUN CORRECTIONS (2026-09-04, sparky1 tc-real): the real model has 256
+  experts (not 128) and experts are MXFP4 (I8 nibbles + per-32-group E8M0
+  scales), NOT FP8; the checkpoint ships its OWN pure-torch reference engine
+  at inference/model.py - it outranks nano_torch AND exllamav3 where they
+  conflict (official hc comb is untransposed). Regeneration MUST use the
+  official template `<bos><|User|>{q}<|Assistant|></think>` (raw continuation
+  drifts into JSON-chat boilerplate). 48-token budgets kill multi-step
+  reasoning traces (a+b*c class) - use >=160.
 - STACK PIVOT (2026-09-03): transformers 5.16's deepseek_v4 class is a
   DIFFERENT parameterization from the raw checkpoint (rope rows split
   out of q_b/kv projections, compressor uses 2*head_dim direct projs
