@@ -1,31 +1,23 @@
 #!/usr/bin/env python3
-"""tc_lora_train.py — ThinkingCap REAL STEP 3 (04-real): LoRA cap training
-through the layer-streaming engine.
+"""glm_tc_lora_train.py — ThinkingCap LoRA cap training for GLM-5.3-Flash
+through the layer-streaming pure-torch engine (port of tc_lora_train.py,
+windowed variant: row-aligned windows with cross-window gradient
+accumulation — KDA rows are cu_seqlens-isolated so windows are exact).
 
-Target set (DOCUMENTED BEFORE TRAINING, PROGRESS.md): per language layer
-i in 0..42, six sites — attn.wq_b, attn.wkv, attn.wo_b + ffn.shared_experts.
-{w1,w2,w3}. This is the dummy 04_train.py precedent (24 adapters on the 4-layer
-nano: same six sites) which itself follows the official ThinkingCap lineage:
-cap the language-stack projections; routed experts, hc, norms untouched; vision
-absent; MTP/DSpark untouched (drafter-anchor lesson). R=8, ALPHA=16, LR=3e-4,
-AdamW, CE on completion tokens only, eos appended to every target completion
-(termination is the signal the cap trains). Adapter save format = dummy 05
-merge format: lora.{layers.i.site.weight}.{A,B}.
+Target set (GLM class analogue of the DSV4 six-site set, per layer class):
+  KDA layers: self_attn.{q,k,v,b,o}_proj.weight + shared_experts x3
+  DSA layers: self_attn.{q_a,q_b,kv_a_proj_with_mqa,kv_b,o}_proj.weight
+              + shared_experts x3
+  dense L0-2: mlp.{gate,up,down}_proj.weight
+Routed experts, hc, norms untouched; vision absent; MTP/DSpark untouched
+(drafter-anchor). R=8 ALPHA=16 LR 3e-4, AdamW, CE on completion tokens only,
+<|endoftext|> (154820) appended to every target completion.
 
-Training-through-streaming method: layer-wise rematerialization.
-  Pass A (no grad): full packed forward, saving the 43+1 stream-stack
-    boundaries (fp32; ~22 GB at S=3000) and computing the CE loss with grad
-    attached ONLY to the final boundary -> g_final.
-  Pass B (reverse, one layer at a time): recompute layer i from its saved
-    input boundary under autograd (adapters active as a separate fp32 delta
-    path — bf16 weight folding would round the small deltas away), then
-    dot(st_out, g_i).sum().backward() gives exact grads for that layer's
-    adapters and g_{i-1} = input.grad. Peak = one layer + boundaries.
-Both passes run with engine.act_dtype=fp32 (tf32 matmuls allowed) so the
-adapter delta reaches the loss un-quantized.
-
-Output: /wd/cap/{lora.safetensors, report_train.json}
-"""
+Method: layer-wise rematerialization (pass A no-grad boundaries + top CE;
+pass B reverse per-layer recompute with (st_out*g).sum().backward()) — same
+as the DSV4 trainer; windowed at WINDOW_S with exact cross-window gradient
+accumulation (loss_w * n_ce_w / n_ce_total). Incremental save every 5
+epochs. Output: /root/tc-glm/cap/{lora.safetensors, report_train.json}."""
 
 import json
 import math
@@ -36,9 +28,9 @@ import time
 import torch
 import torch.nn.functional as F
 
-from full_loader import StreamingDSV4
-from dsv4_full import DSV4Full, rms_w
-from tc_batch_gen import build_prompt
+from glm_full_loader import StreamingGLM
+from glm_full import GLMFull, rms_w
+from glm_tc_batch_gen import get_tok, special_ids, build_prompt_ids
 
 R = 8
 ALPHA = 16
@@ -46,26 +38,45 @@ SCALE = ALPHA / R
 LR = 3e-4
 EPOCHS = 30
 SEED = 20260904
-OUT = "/wd/cap"
+OUT = "/root/tc-glm/cap"
+EOS_ID = 154820                                    # <|endoftext|>
+WINDOW_S = 4096
 
-SITES = ["attn.wq_b.weight", "attn.wkv.weight", "attn.wo_b.weight",
-         "ffn.shared_experts.w1.weight", "ffn.shared_experts.w2.weight",
-         "ffn.shared_experts.w3.weight"]
+SITES_KDA = ["self_attn.q_proj.weight", "self_attn.k_proj.weight",
+             "self_attn.v_proj.weight", "self_attn.b_proj.weight",
+             "self_attn.o_proj.weight"]
+SITES_DSA = ["self_attn.q_a_proj.weight", "self_attn.q_b_proj.weight",
+             "self_attn.kv_a_proj_with_mqa.weight",
+             "self_attn.kv_b_proj.weight", "self_attn.o_proj.weight"]
+SITES_SHARED = ["mlp.shared_experts.gate_proj.weight",
+                "mlp.shared_experts.up_proj.weight",
+                "mlp.shared_experts.down_proj.weight"]
+SITES_DENSE = ["mlp.gate_proj.weight", "mlp.up_proj.weight",
+               "mlp.down_proj.weight"]
 
 
 def collect_targets(loader):
-    """Adapter sites with shapes read from the checkpoint meta (no hardcoding)."""
+    """Adapter sites with shapes from the checkpoint meta (no hardcoding)."""
+    eng_types = loader.cfg.get("layer_types") or []
     out = []
     for i in range(loader.n_layers):
-        for site in SITES:
-            name = f"layers.{i}.{site}"
+        lt = eng_types[i] if i < len(eng_types) else "linear_attention"
+        base = "model.language_model.layers.%d." % i
+        sites = (SITES_KDA if lt == "linear_attention" else SITES_DSA) \
+            + SITES_SHARED
+        if f"{base}mlp.gate.weight" not in loader.meta:
+            sites = sites + SITES_DENSE            # dense L0..first_k-1
+        for site in sites:
+            name = base + site
+            if name not in loader.meta:
+                continue
             shape = tuple(loader.meta[name][1])
             out.append((i, site, name, shape))
     return out
 
 
-def build_sft(tok, rows, eos):
-    """Shortest-correct completion per problem; completion ids + eos (termination)."""
+def build_sft(tok, sp, rows, eos):
+    """Shortest-correct completion per problem; completion ids + eos."""
     best = {}
     for r in rows:
         if not (r["correct"] or r.get("correct_first_answer")):
@@ -75,10 +86,10 @@ def build_sft(tok, rows, eos):
             best[r["pid"]] = r
     sft = []
     for pid, r in sorted(best.items()):
-        pids = tok.encode(build_prompt(r["prompt"])).ids
-        cids = tok.encode(r["completion"]).ids + [eos]
-        sft.append({"pid": pid, "kind": r["kind"], "pids": pids, "cids": cids,
-                    "text": r["completion"]})
+        pids = build_prompt_ids(tok, sp, r["prompt"])
+        cids = tok.encode(r["completion"], add_special_tokens=False).ids + [eos]
+        sft.append({"pid": pid, "kind": r["kind"], "pids": pids,
+                    "cids": cids, "text": r["completion"]})
     return sft
 
 
@@ -87,17 +98,16 @@ def main():
     random.seed(SEED)
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    from tokenizers import Tokenizer
-    tok = Tokenizer.from_file("/model/tokenizer.json")
-    L = StreamingDSV4()
-    eng = DSV4Full(L)
+    tok = get_tok()
+    sp = special_ids(tok)
+    L = StreamingGLM()
+    eng = GLMFull(L)
     eng.act_dtype = torch.float32
-    eos = L.cfg.get("eos_token_id", 1)
 
-    rows = [json.loads(l) for l in open("/wd/data/regen.jsonl")]
-    sft = build_sft(tok, rows, eos)
+    rows = [json.loads(l) for l in open("/root/tc-glm/data/regen.jsonl")]
+    sft = build_sft(tok, sp, rows, EOS_ID)
     print(f"[train] SFT rows: {len(sft)} (shortest-correct per problem), "
-          f"tokens: prompt+completion = "
+          f"tokens prompt+completion = "
           f"{sum(len(r['pids']) + len(r['cids']) for r in sft)}", flush=True)
 
     targets = collect_targets(L)
@@ -119,37 +129,29 @@ def main():
           f"target-site weights {frozen:,}); r={R} alpha={ALPHA} lr={LR} "
           f"epochs={EPOCHS}", flush=True)
 
-    # pack SFT rows once. Full-scale windowing: block_batch attends within a
-    # row only (starts/lens/seq_of isolate rows), so row-aligned windows are
-    # an EXACT re-chunking of the single-pack forward; gradients accumulate
-    # across windows before each optimizer step. Window peak memory stays in
-    # the pilot's ~9 GB class instead of scaling with the whole SFT set.
-    WINDOW_S = 12000
-
-    def pack_rows(rows):
+    # ---- pack SFT rows into row-aligned windows (exact: cu_seqlens isolation)
+    def pack_rows(rows_):
         flat, starts, lens = [], [], []
-        for r in rows:
+        for r in rows_:
             starts.append(len(flat))
             ids = r["pids"] + r["cids"]
             lens.append(len(ids))
             flat.extend(ids)
         S = len(flat)
-        # global predictor mask, length S-1: predictor j (0-based) predicts
-        # flat[j+1]; True iff flat[j+1] is a completion token of the SAME row
-        # (row-boundary predictors stay False; their targets belong to the next
-        # row's prompt)
         mask_t = torch.zeros(S - 1, dtype=torch.bool, device=eng.dev)
-        for r, s in zip(rows, starts):
+        for r, s in zip(rows_, starts):
             ln = len(r["pids"]) + len(r["cids"])
             mask_t[s + len(r["pids"]) - 1: s + ln - 1] = True
         seq_of = torch.repeat_interleave(
-            torch.arange(len(rows), device=eng.dev),
+            torch.arange(len(rows_), device=eng.dev),
             torch.tensor(lens, device=eng.dev))
         pos_of = torch.arange(S, device=eng.dev) - \
             torch.tensor(starts, device=eng.dev, dtype=torch.long)[seq_of]
+        cu = torch.tensor([0] + list(torch.tensor(lens).cumsum(0).tolist()),
+                          dtype=torch.int32, device=eng.dev)
         return {"ids": torch.tensor(flat, dtype=torch.long, device=eng.dev),
                 "mask": mask_t, "seq_of": seq_of, "pos_of": pos_of,
-                "starts": starts, "lens": lens, "S": S,
+                "starts": starts, "lens": lens, "S": S, "cu": cu,
                 "n_ce": int(mask_t.sum())}
 
     windows, cur, cur_tok = [], [], 0
@@ -178,7 +180,6 @@ def main():
         return F.cross_entropy(logits[:-1][p["mask"]], tgt[p["mask"]]), logits
 
     def forward_collect(p):
-        """Pass A: boundaries + loss/grad at the top, one window."""
         ids_t, S = p["ids"], p["S"]
         bounds = []
         with torch.no_grad():
@@ -189,17 +190,16 @@ def main():
                 bounds.append(st)
                 Lw = eng._load_layer(i)
                 st = eng.block_batch(i, Lw, st, ids_t, p["seq_of"], p["pos_of"],
-                                     p["starts"], p["lens"])
+                                     p["starts"], p["lens"], p["cu"])
                 del Lw
         bounds.append(st)
         st_leaf = bounds[-1].detach().requires_grad_(True)
         loss, logits = top_loss_from(st_leaf, p)
         return bounds, st_leaf, loss, logits
 
-    # ---- step-0 bit-identity check (B=0 -> engine output identical to base)
+    # ---- step-0 bit-identity (B=0 loss == base loss on window 0)
     bounds0, st_leaf0, loss0, _ = forward_collect(packs[0])
     loss0.backward()
-    g0 = st_leaf0.grad.detach()
     eng.lora = None
     with torch.no_grad():
         b_base, _, loss_base, _ = forward_collect(packs[0])
@@ -210,18 +210,17 @@ def main():
     assert ident, "adapter path changed the base forward"
     del bounds0, b_base
 
-    report = {"r": R, "alpha": ALPHA, "scale": SCALE, "lr": LR, "epochs": EPOCHS,
-              "seed": SEED, "n_targets": len(adapters), "adapter_params": n_params,
+    report = {"r": R, "alpha": ALPHA, "scale": SCALE, "lr": LR,
+              "epochs": EPOCHS, "seed": SEED, "n_targets": len(adapters),
+              "adapter_params": n_params,
               "frozen_target_site_params": frozen,
-              "target_sites": [t[2] for t in targets[:6]] + ["... x 43 layers"],
               "n_sft_rows": len(sft), "sft_tokens": S,
               "n_windows": len(packs), "window_s": WINDOW_S,
               "ce_targets": n_ce_total,
               "step0_identity": ident, "epoch_loss": [], "epoch_wall_s": [],
-              "grad_norm": [], "act_dtype": "fp32 (tf32 matmuls)",
-              "method": "layer-wise rematerialization: no-grad boundary pass + "
-                        "reverse per-layer dot-product backward; row-aligned "
-                        "exact windows with cross-window gradient accumulation"}
+              "grad_norm": [],
+              "method": "layer-wise remat + row-aligned cu_seqlens windows; "
+                        "fla chunk_kda autograd recurrence"}
     os.makedirs(OUT, exist_ok=True)
 
     def save_cap(final=False):
@@ -242,8 +241,6 @@ def main():
         ep_loss_sum = 0.0
         for p in packs:
             bounds, st_leaf, loss, _ = forward_collect(p)
-            # window CE is a mean over its own targets; rescale so the
-            # accumulated gradient equals the single-pack full-batch gradient
             scaled = loss * (p["n_ce"] / n_ce_total)
             scaled.backward()
             g = st_leaf.grad.detach()
@@ -251,7 +248,8 @@ def main():
                 st_in = bounds[i].detach().requires_grad_(True)
                 Lw = eng._load_layer(i)
                 st_out = eng.block_batch(i, Lw, st_in, p["ids"], p["seq_of"],
-                                         p["pos_of"], p["starts"], p["lens"])
+                                         p["pos_of"], p["starts"], p["lens"],
+                                         p["cu"])
                 (st_out * g).sum().backward()
                 g = st_in.grad.detach()
                 del Lw, st_out, st_in
@@ -274,14 +272,12 @@ def main():
 
     wall = time.time() - t_all
     report["wall_s"] = round(wall, 1)
-    report["training_tokens_per_s"] = round(
-        EPOCHS * S / wall, 1)   # forward tokens per wall second (both passes)
+    report["training_tokens_per_s"] = round(EPOCHS * S / wall, 1)
     save_cap(final=True)
     print(f"[train] CAP saved: {OUT}/lora.safetensors; "
           f"loss {report['epoch_loss'][0]} -> {report['epoch_loss'][-1]} "
           f"over {EPOCHS} epochs, wall {wall/60:.1f} min", flush=True)
-    return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""tc_batch_gen.py — ThinkingCap REAL STEP 2: on-policy regen (batched).
+"""glm_tc_batch_gen.py — ThinkingCap REAL on-policy regen for GLM-5.3-Flash
+(port of tc_batch_gen.py; DSV4 harness is the template).
 
-Coordinator order 2026-09-04: regen kind-2 (a+b*c) only at 160-token budget,
-same temp/samples/template; re-grade; merged downstream with kind/budget
-provenance. Rows carry: kind, budget, hit_cap, correct (strict last-int) and
-correct_first_answer (first-line answer regrade, for truncated-after-answer
-cases only — strict stays the graded field).
+Prompt: official GLM 5.3 chat format from chat_template.jinja —
+  [gMASK]<sop><|system|>Reasoning Effort: Low<|user|>{q}<|assistant|><think>
+with </think> appended immediately (the DSV4 non-thinking equivalent: empty
+think block -> direct answer). Special-token ids are composed
+programmatically (token_to_id) because the tokenizer's text matching of
+<|sop|> is unreliable; <|user|>/<|assistant|>/<think> DO match in text and
+are encoded inline.
 
-Full-run history + seeds in PROGRESS.md.
+Stopping: any eos in text_config.eos_token_id. Rows packed into ONE forward
+per step (forward_batch handles cu_seqlens row isolation for KDA and causal
+per-row masking for DSA); temp 0.8 multinomial, seeded like the DSV4 chain.
 """
 
 import argparse
@@ -19,24 +24,50 @@ import time
 
 import torch
 
-from full_loader import StreamingDSV4
-from dsv4_full import DSV4Full
+from glm_full_loader import StreamingGLM
+from glm_full import GLMFull
 
 TRAIN_SEED = 20260904
 HOLDOUT_SEED = 20260905
 GLOBAL_SEED = 20260977
 TEMP = 0.8
 
-# Official DeepSeek-V4 prompt format (checkpoint encoding/encoding_dsv4.py,
-# thinking_mode="chat" i.e. non-thinking: direct answer after </think>).
-BOS = "<｜begin▁of▁sentence｜>"
-USER_SP = "<｜User｜>"
-ASSISTANT_SP = "<｜Assistant｜>"
-THINK_END = "</think>"
+
+def get_tok():
+    from tokenizers import Tokenizer
+    return Tokenizer.from_file("/root/glm-fp8/tokenizer.json")
 
 
-def build_prompt(q):
-    return BOS + USER_SP + q + ASSISTANT_SP + THINK_END
+def special_ids(tok):
+    ids = {}
+    for s in ("[gMASK]", "<|sop|>", "<|system|>", "<|user|>",
+              "<|assistant|>", "<think>", "</think>"):
+        i = tok.token_to_id(s)
+        if i is None:
+            i = {"[gMASK]": 154822, "<|sop|>": 154823, "<|system|>": 154824,
+                 "<|user|>": 154827, "<|assistant|>": 154828,
+                 "<think>": 154841, "</think>": 154842}[s]
+        ids[s] = int(i)
+    return ids
+
+
+def build_prompt_ids(tok, sp, q):
+    """[gMASK]<sop><|system|>Reasoning Effort: Low<|user|>q<|assistant|><think></think>"""
+    seg = tok.encode("<|system|>Reasoning Effort: Low<|user|>",
+                     add_special_tokens=False).ids
+    # <|system|>/<|user|> match as added tokens in text (verified); fall back
+    # to programmatic composition if the tokenizer ever stops matching them.
+    if sp["<|system|>"] not in seg[:1]:
+        seg = ([sp["<|system|>"]]
+               + tok.encode("Reasoning Effort: Low", add_special_tokens=False).ids
+               + [sp["<|user|>"]])
+    else:
+        seg = [sp["<|system|>"]]
+        seg += tok.encode("Reasoning Effort: Low", add_special_tokens=False).ids
+        seg += [sp["<|user|>"]]
+    return ([sp["[gMASK]"], sp["<|sop|>"]] + seg
+            + tok.encode(q, add_special_tokens=False).ids
+            + [sp["<|assistant|>"], sp["<think>"], sp["</think>"]])
 
 
 def make_problems(seed, n):
@@ -73,16 +104,15 @@ def main():
     ap.add_argument("--kinds", type=str, default="0,1,2")
     ap.add_argument("--seed", type=int, default=TRAIN_SEED)
     ap.add_argument("--sample-seed", type=int, default=GLOBAL_SEED)
-    ap.add_argument("--out", type=str, default="/wd/data/regen.jsonl")
+    ap.add_argument("--out", type=str, default="/root/tc-glm/data/regen.jsonl")
     ap.add_argument("--tag", type=str, default="regen")
     ap.add_argument("--problems", type=str, default=None,
-                    help="JSONL problem file (rows: pid,kind,q,ans); "
-                         "overrides the internal make_problems generator")
+                    help="JSONL problem file (rows: pid,kind,q,ans)")
     a = ap.parse_args()
     kinds = {int(k) for k in a.kinds.split(",")}
 
-    from tokenizers import Tokenizer
-    tok = Tokenizer.from_file("/model/tokenizer.json")
+    tok = get_tok()
+    sp = special_ids(tok)
 
     if a.problems:
         probs = [p for p in (json.loads(l) for l in open(a.problems))
@@ -91,20 +121,21 @@ def main():
               flush=True)
     else:
         probs = [p for p in make_problems(a.seed, a.n) if p["kind"] in kinds]
-    L = StreamingDSV4()
-    eng = DSV4Full(L)
-    eos = L.cfg.get("eos_token_id", 1)
+
+    L = StreamingGLM()
+    eng = GLMFull(L)
+    eos_set = set(eng.eos)
 
     seqs = []
     for p in probs:
-        base = tok.encode(build_prompt(p["q"])).ids
+        base = build_prompt_ids(tok, sp, p["q"])
         for s in range(a.samples):
             seqs.append({"pid": p["pid"], "kind": p["kind"], "s": s,
                          "ids": list(base), "done": False, "new": []})
     print(f"[{a.tag}] {len(probs)} problems (kinds {sorted(kinds)}) x "
           f"{a.samples} samples = {len(seqs)} seqs; MAX_NEW={a.max_new} "
-          f"TEMP={TEMP} seeds problems={a.seed} sample={a.sample_seed}",
-          flush=True)
+          f"TEMP={TEMP} seeds problems={a.seed} sample={a.sample_seed} "
+          f"eos={sorted(eos_set)}", flush=True)
 
     g = torch.Generator().manual_seed(a.sample_seed)
     t_start = time.time()
@@ -121,7 +152,7 @@ def main():
         for r, t in zip(act, nxt):
             r["ids"].append(int(t))
             r["new"].append(int(t))
-            if int(t) == eos:
+            if int(t) in eos_set:
                 r["done"] = True
             total_new += 1
         dt = time.time() - t0
@@ -166,7 +197,8 @@ def main():
     report = {
         "tag": a.tag, "problems_seed": a.seed, "sample_seed": a.sample_seed,
         "kinds": sorted(kinds), "n_problems": len(probs),
-        "n_samples": a.samples, "max_new": a.max_new, "temp": TEMP, "eos": eos,
+        "n_samples": a.samples, "max_new": a.max_new, "temp": TEMP,
+        "eos": sorted(eos_set),
         "correct_samples_strict": sum(r["correct"] for r in rows),
         "correct_samples_first": sum(r["correct_first_answer"] for r in rows),
         "total_samples": len(rows),
@@ -175,22 +207,13 @@ def main():
         "wall_s": round(wall, 1), "step_times_s": [round(t, 1) for t in step_times],
         "tokens_generated": total_new,
         "tokens_per_s_aggregate": round(total_new / max(wall, 1), 2),
-        "prompt_mode": "official chat template, non-thinking "
-                       "(<bos><User>{q}<Assistant></think>)",
+        "prompt_mode": "official GLM chat template, low effort + closed think",
     }
     json.dump(report, open(a.out.replace(".jsonl", "_report.json"), "w"), indent=1)
-    print(f"[{a.tag}] REPORT:", json.dumps({k: v for k, v in report.items()
-                                            if k not in ("step_times_s", "per_kind")},
-                                           indent=1), flush=True)
-    print(f"[{a.tag}] per-kind:", json.dumps(per_kind), flush=True)
-    print(f"[{a.tag}] sample completions:", flush=True)
-    for row in rows[:6]:
-        print(f"   pid{row['pid']} k{row['kind']} s{row['sample']} "
-              f"ok={row['correct']} first={row['correct_first_answer']} "
-              f"cap={row['hit_cap']} n={row['n_new']}: "
-              f"{row['completion'][:90]!r}", flush=True)
-    return 0
+    print(f"[{a.tag}] REPORT:", json.dumps(
+        {k: v for k, v in report.items() if k not in ("step_times_s",)},
+        indent=None)[:600], flush=True)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
