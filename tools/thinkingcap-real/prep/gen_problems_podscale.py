@@ -261,10 +261,34 @@ def main():
     stats = {"dup_skip": 0, "holdout_skip": 0, "attempts": 0}
     rows = []
     for k, nk in zip(kinds, allocate(n, [1] * len(kinds))):
+        # Tier spill: small cells (e.g. 1-digit x 1-digit = 64 exact-match
+        # expressions) saturate below a large --n; the surplus moves to the
+        # NEXT tier of the same kind (easy->medium->hard) instead of failing.
+        # take is capped 8 under the raw space so holdout collisions cannot
+        # wedge the rejection sampler when drawing near-capacity.
+        spill = 0
+        spilled = []
         for diff, cnt in zip(DIFFS, allocate(nk, mix)):
-            if cnt:
-                rows += draw_cell(rng, k, diff, cnt, seen, holdout_exprs,
+            want = cnt + spill
+            spill = 0
+            if not want:
+                continue
+            spec = TIERS[k][diff]
+            space = 1
+            for d in spec["digits"]:
+                lo, hi = digit_span(d)
+                space *= hi - lo + 1
+            take = min(want, max(space - 8, 0))
+            if take < want:
+                spill = want - take
+                spilled.append((diff, spill))
+            if take:
+                rows += draw_cell(rng, k, diff, take, seen, holdout_exprs,
                                   a.seed, stats)
+        if spill:
+            raise SystemExit(
+                f"infeasible: kind {k} still holds {spill} unplaced problems "
+                f"after tier spill (all tiers saturated); lower --n")
     assert len(rows) == n, f"row count {len(rows)} != requested {n}"
     assert len({r["q"] for r in rows}) == n, "duplicate q after dedup"
     final = []
