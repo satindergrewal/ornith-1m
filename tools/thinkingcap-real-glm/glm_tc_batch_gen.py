@@ -39,12 +39,16 @@ def get_tok():
 
 
 def special_ids(tok):
+    """GLM5 special tokens. NOTE the vocab names: '<sop>' (no pipes) =
+    154824 — '<|sop|>' does NOT exist; 154823 is '[sMASK]'. [gMASK]/<sop>/
+    <|system|>/<|user|>/<|assistant|>/<think>/</think> verified via
+    id_to_token on the FP8 tokenizer."""
     ids = {}
-    for s in ("[gMASK]", "<|sop|>", "<|system|>", "<|user|>",
+    for s in ("[gMASK]", "<sop>", "<|system|>", "<|user|>",
               "<|assistant|>", "<think>", "</think>"):
         i = tok.token_to_id(s)
         if i is None:
-            i = {"[gMASK]": 154822, "<|sop|>": 154823, "<|system|>": 154824,
+            i = {"[gMASK]": 154822, "<sop>": 154824, "<|system|>": 154826,
                  "<|user|>": 154827, "<|assistant|>": 154828,
                  "<think>": 154841, "</think>": 154842}[s]
         ids[s] = int(i)
@@ -65,7 +69,7 @@ def build_prompt_ids(tok, sp, q):
         seg = [sp["<|system|>"]]
         seg += tok.encode("Reasoning Effort: Low", add_special_tokens=False).ids
         seg += [sp["<|user|>"]]
-    return ([sp["[gMASK]"], sp["<|sop|>"]] + seg
+    return ([sp["[gMASK]"], sp["<sop>"]] + seg
             + tok.encode(q, add_special_tokens=False).ids
             + [sp["<|assistant|>"], sp["<think>"], sp["</think>"]])
 

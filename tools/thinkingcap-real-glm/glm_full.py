@@ -246,6 +246,11 @@ class GLMFull:
 
     # ---------------------------------------------------------------- attention
     def attn_batch(self, i, L, x, ids, seq_of, pos_of, starts, lens, cu_seqlens):
+        zero = os.environ.get("GLM_ZERO_ATTN", "")    # "dsa"/"kda" ablations
+        if i in self.dsa and zero == "dsa":
+            return torch.zeros_like(x)
+        if i not in self.dsa and zero == "kda":
+            return torch.zeros_like(x)
         if i in self.dsa:
             return self.mla_attn_batch(i, L, x, seq_of, pos_of, starts, lens)
         return self.kda_attn_batch(i, L, x, cu_seqlens)
@@ -267,6 +272,12 @@ class GLMFull:
     def ffn(self, i, L, x, ids):
         if "mlp.gate.weight" not in L:                       # dense L0..first_dense
             return self._dense_ffn(i, L, x)
+        if os.environ.get("GLM_ZERO_ROUTED") == "1":         # ablation: shared only
+            return self.swiglu(x, L["mlp.shared_experts.gate_proj.weight"],
+                               L["mlp.shared_experts.up_proj.weight"],
+                               L["mlp.shared_experts.down_proj.weight"],
+                               li=i, prefix="mlp.shared_experts.gate_proj"
+                               ).to(self.act_dtype)
         xf = x.float()
         logits = xf @ L["mlp.gate.weight"].float().T
         scores = logits.sigmoid()                            # sigmoid scoring
@@ -319,8 +330,14 @@ class GLMFull:
         return y.to(st.dtype), post, comb
 
     def hc_post(self, y, st, post, comb):
-        out = post.unsqueeze(-1) * y.unsqueeze(0).unsqueeze(2).float() \
-            + (comb.unsqueeze(-1) * st.float().unsqueeze(-2)).sum(2)
+        """fork mhc_post_torch: out_j = post_j*y + sum_i comb[i,j]*st_i —
+        the comb-TRANSPOSED orientation. GLM_HC_POST_TRANSPOSED=0 flips to
+        the DSV4 orientation (out_i = sum_j comb[i,j]*st_j) for A/B tests."""
+        if os.environ.get("GLM_HC_POST_TRANSPOSED", "1") == "1":
+            mixed = torch.einsum("bsij,bsih->bsjh", comb.float(), st.float())
+        else:
+            mixed = torch.einsum("bsij,bsjh->bsih", comb.float(), st.float())
+        out = post.unsqueeze(-1) * y.unsqueeze(0).unsqueeze(2).float() + mixed
         return out.to(y.dtype)
 
     def hc_head(self, st):
