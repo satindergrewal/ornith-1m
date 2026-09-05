@@ -187,9 +187,13 @@ class GLMFull:
               @ L["self_attn.g_b_proj.weight"].float().T).view(S, h, d)
         dt_bias = L["self_attn.dt_bias"].float().view(h, d)
         A_log = L["self_attn.A_log"].float().view(1, h, 1)
-        # log-decay gate, per fla gate.naive_kda_lowerbound_gate == the dummy
-        gate = (g1 + dt_bias).clamp(min=self.lower_bound).sigmoid()
-        g = -A_log.exp() * gate                              # (S, h, d) <= 0
+        # log-decay gate, EXACTLY fla.ops.kda.gate.naive_kda_lowerbound_gate:
+        #   g = lower_bound * sigmoid(exp(A_log) * (g1 + dt_bias))
+        # (exp(A_log) INSIDE the sigmoid; lower_bound scales the output into
+        # [lb, 0); NO clamp. The earlier -exp(A_log)*sigmoid(clamp(...)) form
+        # was the wrong algebra — the depth-ladder decay vs the serve caught
+        # it: per-token state error compounds through the recurrence.)
+        g = self.lower_bound * torch.sigmoid(A_log.exp() * (g1 + dt_bias))
 
         B = 1
         o, _ = chunk_kda(
