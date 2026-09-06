@@ -36,9 +36,11 @@ import torch.nn.functional as F
 SCHEMA = "quant-pipeline.dsv4-capture.v1"
 ROLES = ("fit", "conditional-fit", "selection", "confirmation")
 MAX_WINDOW_TOKENS = 4096
-BATCH_ROWS = 30_000  # rows per forward_batch; amortizes the per-layer
-                     # expert dequant sweep (the 1-tok/s single-seq smoke
-                     # measured the sweep cost, not a batching limit)
+# Rows per forward_batch. The engine's fp32 attention einsum scales with
+# rows x heads x ctx: 30k rows OOM'd a 96GB card (36GB single alloc),
+# 6.3k fit cleanly - start at 8k and tune via env. Batching exists to
+# amortize the per-layer expert dequant sweep (1 tok/s single-seq).
+BATCH_ROWS = int(os.environ.get("TC_BATCH_ROWS", "8000"))
 ROLE_CYCLE = ["fit", "fit", "fit", "fit", "conditional-fit",
               "selection", "confirmation"]
 
