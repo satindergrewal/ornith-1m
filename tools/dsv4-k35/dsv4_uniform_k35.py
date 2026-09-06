@@ -279,11 +279,39 @@ def _routed_shape_gate(name: str, shape: Any) -> None:
         if projection in ("w1", "w3")
         else (common.HIDDEN_SIZE, common.INTERMEDIATE_SIZE)
     )
-    if tuple(int(v) for v in shape) != expected:
-        die(
-            f"routed shape drift for {name}: {list(shape)} differs from "
-            f"{list(expected)} (orientation or geometry drift)"
-        )
+    shape_t = tuple(int(v) for v in shape)
+    if shape_t == expected:
+        return  # logical (BF16-form) layout
+    packed = (expected[0], expected[1] // 2)
+    if shape_t == packed:
+        return  # packed master: I8 nibble pairs along K (element 2i=LOW)
+    die(
+        f"routed shape drift for {name}: {list(shape)} differs from "
+        f"logical {list(expected)} or packed {list(packed)} "
+        "(orientation or geometry drift)"
+    )
+
+
+def _routed_logical_elements(row: Mapping[str, Any]) -> int:
+    """Logical element count for a routed row: packed I8 rows carry the
+    nibble pairs of 2x the logical K; logical rows count directly."""
+    match = ROUTED.fullmatch(row["tensor_name"]) or MTP_ROUTED.fullmatch(
+        row["tensor_name"])
+    if match is None:
+        die(f"routed row does not match the master grammar: "
+            f"{row['tensor_name']}")
+    projection = match.group(3)
+    expected = (
+        (common.INTERMEDIATE_SIZE, common.HIDDEN_SIZE)
+        if projection in ("w1", "w3")
+        else (common.HIDDEN_SIZE, common.INTERMEDIATE_SIZE)
+    )
+    shape = [int(v) for v in row["shape"]]
+    if tuple(shape) == expected:
+        return shape[0] * shape[1]
+    if shape == [expected[0], expected[1] // 2]:
+        return shape[0] * shape[1] * 2
+    die(f"routed shape is neither logical nor packed: {row['tensor_name']}")
 
 
 def _inventory_surfaces(
@@ -548,7 +576,8 @@ def build_launch_plan(
                 "expert_count": common.NUM_EXPERTS,
                 "matrix_count": len(rows),
                 "source_bytes": sum(int(row["source_bytes"]) for row in rows),
-                "source_elements": sum(math.prod(row["shape"]) for row in rows),
+                "source_elements": sum(
+                    _routed_logical_elements(row) for row in rows),
                 "tensor_names_sha256": common.sha256_bytes(
                     common.canonical_json(names)),
                 "rate": {
