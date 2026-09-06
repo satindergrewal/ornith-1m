@@ -446,6 +446,7 @@ def main() -> None:
         records.append(
             {
                 "expert": expert,
+                "dead_in_distribution": mass == 0.0,
                 "tensor_names": {
                     projection: common.tensor_full_name(layer, expert, projection)
                     for projection in common.PROJECTIONS

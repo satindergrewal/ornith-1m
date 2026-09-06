@@ -395,28 +395,43 @@ def _routed_evidence(routed) -> dict[str, Any]:
 
 
 def expert_p2_mass(capture: Any, expert: int) -> float:
-    """Per-expert p2 mass over fit rows (the DP gain weight)."""
+    """Per-expert p2 mass over fit rows (the DP gain weight).
+
+    A DEAD-IN-DISTRIBUTION expert (zero fit rows in the sealed capture)
+    returns mass 0.0: the DP gain is identically 0 at both rates and the
+    low-bits-first tie rule assigns floor bits, so the upgrade budget
+    flows to live experts. This is a deliberate, receipt-recorded DSV4
+    delta from the GLM campaign, which die()d here because its corpus
+    guaranteed full coverage; ours empirically does not (L18 E79 stayed
+    at zero across 371k tokens over three domains). Callers must record
+    the zero in the ledger (probe writes dead_in_distribution)."""
     routed = capture.routed_rows(expert, "fit")
     if routed.rows <= 0:
-        die(f"L{capture.layer} E{expert}: fit rows are empty; "
-            "mass is undefined (extend corpus or reassign role)")
+        return 0.0
     weights = np.asarray(routed.applied_weights, dtype=np.float64)
     mass = float(np.square(weights).sum())
     if mass <= 0:
-        die(f"L{capture.layer} E{expert}: degenerate p2 mass")
+        die(f"L{capture.layer} E{expert}: degenerate p2 mass "
+            f"({routed.rows} rows but zero weight mass)")
     return mass
 
 
 def gate_covariance(codec, capture: Any, expert: int, device: str,
                     chunk_rows: int):
     """Routed p2 uncentered full covariance over 'fit' rows (w1 and w3
-    input space = hidden)."""
+    input space = hidden). Dead-in-distribution experts (zero fit rows)
+    get the SIGMA_REG identity ridge - no data, receipt says so."""
     import torch
 
     hessian = r7_hessian()
     routed = capture.routed_rows(expert, "fit")
     if routed.rows <= 0:
-        die(f"L{capture.layer} E{expert}: empty fit rows")
+        return (torch.eye(HIDDEN_SIZE, device=device) * SIGMA_REG, {
+            "rows": 0,
+            "documents": 0,
+            "construction": "dead-expert-identity-ridge-v1",
+            "weight_sum": 0.0,
+        })
     accumulator = hessian.FullCovarianceAccumulator(
         HIDDEN_SIZE, device=device, guided=True)
     cursor = 0
@@ -447,7 +462,12 @@ def down_covariance(codec, capture: Any, expert: int, gate_kn, up_kn, *,
     hessian = r7_hessian()
     routed = capture.routed_rows(expert, "conditional-fit")
     if routed.rows <= 0:
-        die(f"L{capture.layer} E{expert}: empty conditional-fit rows")
+        return (torch.eye(INTERMEDIATE_SIZE, device=device) * SIGMA_REG, {
+            "rows": 0,
+            "documents": 0,
+            "construction": "dead-expert-identity-ridge-v1",
+            "weight_sum": 0.0,
+        })
     accumulator = hessian.FullCovarianceAccumulator(
         INTERMEDIATE_SIZE, device=device, guided=True)
     gate_rt = gate_kn.to(device)
