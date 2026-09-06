@@ -133,9 +133,14 @@ def main():
     print(f"[ab] {len(probs)} problems x {N_SAMPLES} samples, "
           f"budget {MAX_NEW}, temp {TEMP} topk {TOP_K}", flush=True)
 
-    base_rows = run_arm(eng, tok, probs, "base")
+    if os.path.exists("/wd/data/token_ab_base.json"):
+        base_rows = json.load(open("/wd/data/token_ab_base.json"))
+        print(f"[ab] reusing base arm rows: {len(base_rows)}", flush=True)
+    else:
+        base_rows = run_arm(eng, tok, probs, "base")
+        json.dump(base_rows, open("/wd/data/token_ab_base.json", "w"),
+                  indent=1)
     out_all += base_rows
-    json.dump(base_rows, open("/wd/data/token_ab_base.json", "w"), indent=1)
 
     from tc_lora_train import SCALE
     n = eng.attach_lora(args.lora, SCALE, fold=True)

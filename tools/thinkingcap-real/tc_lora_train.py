@@ -124,7 +124,10 @@ def main():
     # an EXACT re-chunking of the single-pack forward; gradients accumulate
     # across windows before each optimizer step. Window peak memory stays in
     # the pilot's ~9 GB class instead of scaling with the whole SFT set.
-    WINDOW_S = 12000
+    # fp32 activation sims on routed-expert graphs make pass-B memory scale
+    # ~linearly with window S (12K windows OOM'd a 95GB card; the pilot's
+    # ~9GB peak was at S=3000). 4000 keeps peak in the pilot class.
+    WINDOW_S = 4000
 
     def pack_rows(rows):
         flat, starts, lens = [], [], []
