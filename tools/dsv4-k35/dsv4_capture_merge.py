@@ -35,11 +35,26 @@ def main():
     for root in args.shards:
         m = json.load(open(os.path.join(root, "capture-manifest.json")))
         assert m["schema"] == SCHEMA, f"schema drift in {root}"
+        # re-verify the shard seal: the merged manifest must never vouch
+        # for bytes an edited/tampered shard manifest describes
+        assert canonical_sha(m, "capture_sha256") == m["capture_sha256"], \
+            f"shard seal differs: {root}"
         manifests.append(m)
     base = manifests[0]
     for m in manifests[1:]:
         assert m["geometry"] == base["geometry"], "geometry drift"
         assert m["layers"] == base["layers"], "layer set drift"
+    for root, m in zip(args.shards, manifests):
+        import hashlib as _h
+        for L_files in m["files"].values():
+            for rec in L_files.values():
+                src = os.path.join(root, rec["path"])
+                digest = _h.sha256()
+                with open(src, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 22), b""):
+                        digest.update(chunk)
+                assert digest.hexdigest() == rec["sha256"], \
+                    f"shard payload differs from its manifest: {src}"
 
     os.makedirs(args.out, exist_ok=True)
     layers = base["layers"]

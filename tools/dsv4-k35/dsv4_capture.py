@@ -224,16 +224,24 @@ def main():
     total = sum(len(w[1]) for w in windows)
     print(f"[cap] docs {len(docs)} windows {len(windows)} tokens {total} "
           f"(target {args.target_tokens})", flush=True)
-    # group windows into batches (rows <= BATCH_ROWS); each batch is one
-    # forward_batch call = one expert sweep amortized over all its rows.
-    # Docs never split batches, so roles stay document-disjoint.
+    # role per DOCUMENT (document-disjoint by construction - a multi-window
+    # document keeps one role even when its windows land in different
+    # batches); batches are then formed within role groups
+    doc_role = {}
+    for did, _ in windows:
+        if did not in doc_role:
+            doc_role[did] = ROLE_CYCLE[len(doc_role) % len(ROLE_CYCLE)]
     batches = []
     cur = []
+    cur_role = None
     for did, ids in windows:
-        if cur and sum(len(i) for _, i in cur) + len(ids) > BATCH_ROWS:
+        role = doc_role[did]
+        if cur and (cur_role != role or
+                    sum(len(i) for _, i in cur) + len(ids) > BATCH_ROWS):
             batches.append(cur)
             cur = []
         cur.append((did, ids))
+        cur_role = role
     if cur:
         batches.append(cur)
 
@@ -246,7 +254,9 @@ def main():
 
     journal, cursor, t0 = [], 0, time.time()
     for bi, batch in enumerate(batches):
-        role = ROLE_CYCLE[bi % len(ROLE_CYCLE)]
+        role = doc_role[batch[0][0]]
+        assert all(doc_role[d] == role for d, _ in batch), \
+            "role straddle within batch (document-disjointness bug)"
         eng.forward_batch([ids for _, ids in batch])
         rows = sum(len(ids) for _, ids in batch)
         journal.append({"window_index": bi, "rows": rows, "role": role,

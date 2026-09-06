@@ -101,10 +101,12 @@ def load_json(path: str | Path) -> Any:
 
 
 def write_json(path: str | Path, body: Mapping[str, Any]) -> None:
-    tmp = Path(str(path) + ".tmp")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(
         json.dumps(body, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    tmp.replace(target)
 
 
 def canonical_json(body: Any) -> bytes:
@@ -463,10 +465,16 @@ def down_covariance(codec, capture: Any, expert: int, gate_kn, up_kn, *,
     hessian = r7_hessian()
     routed = capture.routed_rows(expert, "conditional-fit")
     if routed.rows <= 0:
+        # the conditioning context is real (gate/up decoded at the given
+        # bits - the caller always performs the FLOOR_BITS reference
+        # encodes), so stamping its rates keeps verify_expert_receipt's
+        # evidence-vs-record invariant true for dead experts
         return (torch.eye(INTERMEDIATE_SIZE, device=device) * SIGMA_REG, {
             "rows": 0,
             "documents": 0,
             "construction": "dead-expert-identity-ridge-v1",
+            "conditioning_gate_bits": int(gate_bits),
+            "conditioning_up_bits": int(up_bits),
             "weight_sum": 0.0,
         })
     accumulator = hessian.FullCovarianceAccumulator(

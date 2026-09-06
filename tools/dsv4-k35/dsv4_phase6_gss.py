@@ -547,7 +547,31 @@ def _p2_profile_statistics(
     for expert in range(common.NUM_EXPERTS):
         routed = capture.routed_rows(expert, "fit")
         if routed.rows <= 0:
-            die(f"L{layer} E{expert}: profile fit has no routed rows")
+            # dead-in-distribution expert (receipt vocabulary matches
+            # dsv4_common's dead-expert-identity-ridge-v1): mass 0 so the
+            # mass-weighted shared sums exclude it entirely; neutral ones
+            # diagonals so the expert's OWN GSS vector input is unguided -
+            # the same treatment the phase-5 probe gives dead experts.
+            # Deleting the die alone would 0/0 the per-expert diagonals.
+            triplet = load_triplet(source, layer, expert, device)
+            gate_diagonal[expert].fill_(1.0)
+            down_diagonal[expert].fill_(1.0)
+            masses[expert] = 0.0
+            down_output_energy[expert].copy_(
+                triplet["down_proj"].float().pow(2).mean(dim=1).cpu())
+            row_evidence.append(
+                {
+                    "expert": expert,
+                    "rows": 0,
+                    "documents": 0,
+                    "weight_sum": 0.0,
+                    "construction": "dead_in_distribution",
+                    "row_indices_sha256": hashlib.sha256(b"").hexdigest(),
+                    "route_weights_sha256": hashlib.sha256(b"").hexdigest(),
+                }
+            )
+            del triplet
+            continue
         weights = np.asarray(routed.applied_weights, dtype=np.float64)
         p2_mass = float(np.square(weights).sum())
         if not math.isfinite(p2_mass) or p2_mass <= 0:
@@ -586,6 +610,9 @@ def _p2_profile_statistics(
             }
         )
         del triplet, gate_weight, up_weight, gate_sum, down_sum
+    if masses.sum() <= 0:
+        die(f"L{layer}: every expert is dead-in-distribution; the shared "
+            "diagonals would be 0/0")
     shared_gate = (
         gate_diagonal.double() * masses.unsqueeze(1)).sum(dim=0) / masses.sum()
     shared_down_output = (

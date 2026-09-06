@@ -432,23 +432,26 @@ def recover_worker(args: argparse.Namespace) -> None:
 # Shard keys are the CODEC role vocabulary (gate/up/down), not master
 # projections; load_preparation is the GSS boundary and keeps the sealed
 # layout, the caller applies PROJECTION_ROLE at the call site.
+# Preparation shards carry MASTER projection names (the phase-6 producer
+# keys tensors w1/w3/w2; master vocabulary is the campaign rule). The
+# codec boundary maps via PROJECTION_ROLE at the call site.
 _PREPARATION_REQUIRED_KEYS = {
     "permutations",
-    "gate_suh",
-    "gate_svh",
-    "up_suh",
-    "up_svh",
-    "down_suh",
-    "down_svh",
+    "w1_suh",
+    "w1_svh",
+    "w3_suh",
+    "w3_svh",
+    "w2_suh",
+    "w2_svh",
 }
 _PREPARATION_SHAPES = {
     "permutations": (common.NUM_EXPERTS, common.INTERMEDIATE_SIZE),
-    "gate_suh": (common.NUM_EXPERTS, common.HIDDEN_SIZE),
-    "gate_svh": (common.NUM_EXPERTS, common.INTERMEDIATE_SIZE),
-    "up_suh": (common.NUM_EXPERTS, common.HIDDEN_SIZE),
-    "up_svh": (common.NUM_EXPERTS, common.INTERMEDIATE_SIZE),
-    "down_suh": (common.NUM_EXPERTS, common.INTERMEDIATE_SIZE),
-    "down_svh": (common.NUM_EXPERTS, common.HIDDEN_SIZE),
+    "w1_suh": (common.NUM_EXPERTS, common.HIDDEN_SIZE),
+    "w1_svh": (common.NUM_EXPERTS, common.INTERMEDIATE_SIZE),
+    "w3_suh": (common.NUM_EXPERTS, common.HIDDEN_SIZE),
+    "w3_svh": (common.NUM_EXPERTS, common.INTERMEDIATE_SIZE),
+    "w2_suh": (common.NUM_EXPERTS, common.INTERMEDIATE_SIZE),
+    "w2_svh": (common.NUM_EXPERTS, common.HIDDEN_SIZE),
 }
 
 
@@ -523,19 +526,19 @@ def load_preparation(root: Path, layer: int, *, expected_bits: int):
 
 
 def preparation_vectors(
-    tensors: Mapping[str, Any], role: str, expert: int, device: str
+    tensors: Mapping[str, Any], projection: str, expert: int, device: str
 ):
     """Move one expert's suh/svh rows to the encode device.
 
-    ``role`` is the CODEC role (gate_proj/up_proj/down_proj); the shard
-    keys carry that vocabulary.  Master projections reach this helper only
-    through PROJECTION_ROLE at the call site.
+    ``projection`` is the MASTER projection (w1/w3/w2); the preparation
+    shard carries master-vocabulary keys, matching the phase-6 producer.
     """
 
-    prefix = role.removesuffix("_proj")
+    if projection not in common.PROJECTIONS:
+        die(f"preparation_vectors: unknown projection {projection}")
     return (
-        tensors[f"{prefix}_suh"][expert].to(device),
-        tensors[f"{prefix}_svh"][expert].to(device),
+        tensors[f"{projection}_suh"][expert].to(device),
+        tensors[f"{projection}_svh"][expert].to(device),
     )
 
 
@@ -1018,7 +1021,7 @@ def encode_layer(
             bits = bits_by_projection[projection]
             vectors = tensors_k4 if bits == 4 else tensors_k3
             suh, svh = preparation_vectors(
-                vectors, PROJECTION_ROLE[projection], expert, args.device
+                vectors, projection, expert, args.device
             )
             candidate = encode_one_rate(
                 codec,
@@ -1087,7 +1090,7 @@ def encode_layer(
             else:
                 vectors = tensors_k4 if reference_bits == 4 else tensors_k3
                 suh, svh = preparation_vectors(
-                    vectors, PROJECTION_ROLE[projection], expert, args.device
+                    vectors, projection, expert, args.device
                 )
                 conditioning[projection] = encode_one_rate(
                     codec,
@@ -1133,7 +1136,7 @@ def encode_layer(
 
         vectors_down = tensors_k4 if down_bits == 4 else tensors_k3
         suh_down, svh_down = preparation_vectors(
-            vectors_down, PROJECTION_ROLE["w2"], expert, args.device
+            vectors_down, "w2", expert, args.device
         )
         down_candidate = encode_one_rate(
             codec,
