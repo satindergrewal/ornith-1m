@@ -60,12 +60,18 @@ from dsv4_common import die
 WORK_ROOT_DEFAULT = os.environ.get("DSV4_WORK_ROOT", "/workspace/dsv4-work")
 GPU_NAME = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 COMPUTE_CAPABILITY = "12.0"
-RATIONALE = "runpod 1-GPU venue; 4-worker when capacity"
+RATIONALE = "runpod 1-GPU-pod venue; 8 single-GPU pods at his 8-pod go (same class, shared volume)"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="phase 4 dsv4: inventory + declared preflight + launch plan"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="declared worker count (1..8; GPU rows are generated to match)",
     )
     parser.add_argument(
         "--work-root",
@@ -124,7 +130,8 @@ def load_or_build_inventory(args: argparse.Namespace) -> dict:
     return inventory
 
 
-def build_preflight(inventory: dict, args: argparse.Namespace) -> dict:
+def build_preflight(inventory: dict, args: argparse.Namespace,
+                   workers: int = 1) -> dict:
     """Declared sm120 preflight for the runpod 1-GPU venue (mirror of
     k35_phase4_plan.py:26-45; one GPU row today, worker census honest)."""
     if args.runtime_receipt is not None:
@@ -143,13 +150,14 @@ def build_preflight(inventory: dict, args: argparse.Namespace) -> dict:
             "mode": "layer-streaming",
             "checkpoint_seal_mode": "full-shard-sha256",
             "checkpoint_inventory_sha256": inventory["inventory_sha256"],
-            "workers": 1,
+            "workers": workers,
             "gpus": [
                 {
-                    "index": 0,
+                    "index": slot,
                     "name": GPU_NAME,
                     "compute_capability": COMPUTE_CAPABILITY,
                 }
+                for slot in range(workers)
             ],
             "declaration": {
                 "attested_by": k35.DECLARED_ATTESTED_BY,
@@ -203,7 +211,7 @@ def main() -> int:
     args.work_root.mkdir(parents=True, exist_ok=True)
 
     inventory = load_or_build_inventory(args)
-    preflight = build_preflight(inventory, args)
+    preflight = build_preflight(inventory, args, workers=args.workers)
     common.write_json(args.work_root / "preflight-declared.json", preflight)
 
     allocations = load_or_seal_allocations(args.work_root)

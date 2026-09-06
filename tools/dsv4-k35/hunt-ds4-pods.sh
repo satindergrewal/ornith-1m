@@ -37,8 +37,8 @@ except Exception:
 
 while :; do
   N=$(count_pods)
-  if [ "${N:-0}" -ge 4 ]; then
-    echo "HUNT-DONE at $N pods"
+  if [ "${N:-0}" -ge 8 ]; then
+    echo "HUNT-DONE at $N pods (cap 8)"
     exit 0
   fi
   ID=$(try_create "$((N+1))")

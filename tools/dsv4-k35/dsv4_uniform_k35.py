@@ -89,7 +89,7 @@ SM120_DECLARED_PREFLIGHT_SCHEMA = "quant-pipeline.dsv4-sm120-declared-preflight.
 PREFLIGHT_VARIANT = "sm120-declared"
 DECLARED_ATTESTED_BY = "sm120-declared-variant"
 MIN_DECLARED_WORKERS = 1
-MAX_DECLARED_WORKERS = 4
+MAX_DECLARED_WORKERS = 8
 
 # Adopted from dsv4_phase6b_enter.py:42-45 (the entry snippet already
 # mints states under this schema and evidence key).
