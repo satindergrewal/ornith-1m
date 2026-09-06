@@ -668,6 +668,18 @@ def _matrix_inputs_for_expert(
     shared_down_sign = _sign(
         common.HIDDEN_SIZE, seed, layer, policy, family, "down-svh").to(device)
     mass = float(statistics["masses"][expert].item())
+    if mass <= 0.0:
+        # dead-in-distribution expert (statistics branch wrote ones diagonals
+        # and mass 0): every v31 surface validates mass > 0 (absolute_v31
+        # batch prepare, streaming_v31 spec, artifact_v31 record verify), so
+        # the dead expert flows with a deterministic positive sentinel =
+        # (layer's minimum live p2 mass) * 1e-6.  Its fit-selection weight is
+        # then ~1e-9 of the layer denominator: excluded for all practical
+        # purposes while write and verify stay internally consistent.  The
+        # encode side gives dead experts floor bits from the sealed probe
+        # allocation; the worker never reads artifact mass.
+        live = statistics["masses"][statistics["masses"] > 0]
+        mass = float(live.min().item()) * 1e-6
     permuted_down_diag = statistics["down_diagonal"][expert][list(permutation)].tolist()
     rows = []
     for projection, weight, hdiag, suh, svh in (
