@@ -319,7 +319,8 @@ class Dsv4CaptureView:
         if any(paths[k].stat().st_size != v for k, v in expected.items()):
             raise ValueError("capture artifact sizes disagree with rows")
         self.hidden_u16 = np.memmap(
-            paths["hidden_bf16"], dtype="<u2", mode="r")
+            paths["hidden_bf16"], dtype="<u2", mode="r").reshape(
+                cursor, HIDDEN_SIZE)
         self.ids = np.memmap(
             paths["topk_ids_u16le"], dtype="<u2", mode="r").reshape(
                 cursor, TOP_K)
@@ -344,9 +345,9 @@ class Dsv4CaptureView:
         keep = hit.any(axis=1) & (self.row_roles == role)
         rows = int(keep.sum())
         idx = np.flatnonzero(keep)
-        # per-row applied weight for this expert (0 where not routed);
-        # a row routes an expert at most once (no-duplicate invariant)
-        w = np.where(hit[idx], self.weights[idx], 0.0).astype(np.float64)
+        # per-row applied weight FOR THIS EXPERT (0 where not routed); a
+        # row routes an expert at most once (no-duplicate invariant)
+        w = (self.weights[idx] * hit[idx].astype(np.float32)).sum(axis=1)
         # document epochs: min epoch over the row's doc atoms
         epoch = np.array(
             [min(self._doc_epoch[a] for a in d.split(",") if a in
