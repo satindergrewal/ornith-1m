@@ -36,6 +36,9 @@ import torch.nn.functional as F
 SCHEMA = "quant-pipeline.dsv4-capture.v1"
 ROLES = ("fit", "conditional-fit", "selection", "confirmation")
 MAX_WINDOW_TOKENS = 4096
+BATCH_ROWS = 30_000  # rows per forward_batch; amortizes the per-layer
+                     # expert dequant sweep (the 1-tok/s single-seq smoke
+                     # measured the sweep cost, not a batching limit)
 ROLE_CYCLE = ["fit", "fit", "fit", "fit", "conditional-fit",
               "selection", "confirmation"]
 
@@ -67,7 +70,7 @@ class FlatCaptureStore:
     def append(self, layer, x, sel, w):
         p = self.parts[layer]
         p["hidden"].write(x.detach().to(torch.bfloat16).cpu()
-                          .numpy().tobytes())
+                          .view(torch.uint16).numpy().tobytes())
         p["ids"].write(sel.detach().cpu().numpy().astype("<u2").tobytes())
         p["w"].write(w.detach().cpu().numpy().astype("<f4").tobytes())
 
@@ -179,6 +182,9 @@ def main():
     ap.add_argument("--tokenizer", default="/model/tokenizer.json")
     ap.add_argument("--lora", default="/wd/cap/lora.safetensors")
     ap.add_argument("--max-windows", type=int, default=None)
+    ap.add_argument("--doc-slice", default=None,
+                    help="'START:END' slice of corpus docs (data-parallel "
+                         "shards across pods; keep document-disjoint)")
     ap.add_argument("--target-tokens", type=int, default=250_000)
     ap.add_argument("--smoke", action="store_true",
                     help="3 windows, then per-expert coverage report")
@@ -195,22 +201,39 @@ def main():
 
     tok = Tokenizer.from_file(args.tokenizer)
     docs = load_corpus(args.corpus)
+    if args.doc_slice:
+        lo, hi = (int(x) for x in args.doc_slice.split(":"))
+        docs = docs[lo:hi]
+        print(f"[cap] doc slice {lo}:{hi} -> {len(docs)} docs", flush=True)
 
     windows = []
+    total_pool = 0
     for did, text in docs:
-        ids = tok.encode(text).ids[:args.target_tokens * 2]
+        ids = tok.encode(text).ids[:MAX_WINDOW_TOKENS * 2]
         for s in range(0, len(ids), MAX_WINDOW_TOKENS):
             piece = ids[s:s + MAX_WINDOW_TOKENS]
-            if len(piece) >= 256:  # skip tiny tails
+            if len(piece) >= 256 and total_pool < args.target_tokens:
                 windows.append((did, piece))
+                total_pool += len(piece)
     if args.smoke:
         windows = windows[:3]
     elif args.max_windows:
         windows = windows[:args.max_windows]
-    doc_role = {}
     total = sum(len(w[1]) for w in windows)
-    print(f"[cap] docs {len(docs)} windows {len(windows)} tokens {total}",
-          flush=True)
+    print(f"[cap] docs {len(docs)} windows {len(windows)} tokens {total} "
+          f"(target {args.target_tokens})", flush=True)
+    # group windows into batches (rows <= BATCH_ROWS); each batch is one
+    # forward_batch call = one expert sweep amortized over all its rows.
+    # Docs never split batches, so roles stay document-disjoint.
+    batches = []
+    cur = []
+    for did, ids in windows:
+        if cur and sum(len(i) for _, i in cur) + len(ids) > BATCH_ROWS:
+            batches.append(cur)
+            cur = []
+        cur.append((did, ids))
+    if cur:
+        batches.append(cur)
 
     eng = DSV4Full(StreamingDSV4())
     n = eng.attach_lora(args.lora, SCALE, fold=True)
@@ -220,17 +243,16 @@ def main():
     instrument(eng, store)
 
     journal, cursor, t0 = [], 0, time.time()
-    for wi, (did, ids) in enumerate(windows):
-        if did not in doc_role:
-            doc_role[did] = ROLE_CYCLE[len(doc_role) % len(ROLE_CYCLE)]
-        eng.forward(torch.tensor(ids, dtype=torch.long, device=eng.dev))
-        journal.append({"window_index": wi, "rows": len(ids),
-                        "role": doc_role[did], "document_id": did})
-        cursor += len(ids)
-        if (wi + 1) % 5 == 0 or wi == len(windows) - 1:
-            el = time.time() - t0
-            print(f"[cap] window {wi+1}/{len(windows)} rows {cursor} "
-                  f"({el:.0f}s, {cursor/max(el,1):.0f} tok/s)", flush=True)
+    for bi, batch in enumerate(batches):
+        role = ROLE_CYCLE[bi % len(ROLE_CYCLE)]
+        eng.forward_batch([ids for _, ids in batch])
+        rows = sum(len(ids) for _, ids in batch)
+        journal.append({"window_index": bi, "rows": rows, "role": role,
+                        "document_id": ",".join(d for d, _ in batch)})
+        cursor += rows
+        el = time.time() - t0
+        print(f"[cap] batch {bi+1}/{len(batches)} rows {cursor} "
+              f"({el:.0f}s, {cursor/max(el,1):.0f} tok/s)", flush=True)
 
     manifest = store.finalize(
         geometry={"hidden_size": g.hidden, "experts": g.n_experts,
