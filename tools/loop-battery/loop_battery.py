@@ -159,7 +159,10 @@ class Client:
         d = json.load(urllib.request.urlopen(req, timeout=3600))
         msg = d["choices"][0]["message"]
         content = msg.get("content") or ""
-        reasoning = msg.get("reasoning_content") or ""
+        # vLLM forks name this field either `reasoning` or
+        # `reasoning_content`; read both (GLM loops live in the thinking
+        # block - missing it would blind detection).
+        reasoning = msg.get("reasoning") or msg.get("reasoning_content") or ""
         lps = [c["logprobs"]["content"][0]["logprob"]
                if c.get("logprobs") and c["logprobs"].get("content")
                else None for c in d["choices"][0].get("logprobs", {}).get("content", [])]

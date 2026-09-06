@@ -62,15 +62,47 @@ Run a specific set with `--cases cases-cybergym`. For a before/after
 (base vs capped) comparison, run the SAME case set and depths against
 both endpoints and diff the per-case loop rates.
 
-## Roadmap: tool-use battery mode
+## Tool-use battery mode (agentic sessions)
 
-Plain generation is one failure surface. Deep agentic sessions (the
-real workload) add another: repeated identical tool calls, circular
-search loops, and re-reading the same file forever are the same
-attractor wearing a tool harness. Planned second mode: give the model a
-small tool set (web search, file read) and detect loop signatures in
-the TOOL-CALL sequence, same detection math on call n-grams. Not built
-yet; the case prompts above transfer unchanged.
+Plain generation is one failure surface. Deep agentic sessions (the real
+workload) add another: repeated identical tool calls, circular search
+loops, and re-querying the same thing forever are the same attractor
+wearing a tool harness. `tool_battery_agentic.py` gives the model a
+`web_search` tool (served by the harness over the Brave Search API - the
+model never sees the key; it is read from `--brave-key-file` or
+`$BRAVE_API_KEY` at runtime and must never be committed) and runs the
+same deep-context research cases. Detection runs on BOTH channels:
+
+1. **tool-call signatures** - exact cycle, single-call dominance, and
+   repeated n-gram coverage over the (tool, args) sequence
+2. **assistant text** - the same detectors as the text battery, run over
+   reasoning + content
+
+Verdict per session: `TOOL_LOOP`, `TEXT_LOOP`, or `CLEAN`, with the
+repeating call/query span as the receipt.
+
+```
+python3 tool_battery_agentic.py --base-url http://your-host:8012/v1 \
+    --model YOUR-MODEL --api-key KEY \
+    --brave-key-file /path/outside/this/repo/brave.key \
+    --depths 350000,500000 --cases cases-cybergym --max-steps 24
+```
+
+Keep the Brave key file OUTSIDE this repository (the key is read at
+runtime and must never be committed; a rejected 401/403 key aborts the
+run immediately instead of burning sessions). `--selftest` validates the
+detectors offline. Each output row carries `verdict` (TOOL_LOOP /
+TEXT_LOOP / CLEAN / ERROR), `truncated` (finish_reason=length - a
+budget-limited session is not a completed answer), the tool and text
+detector details, and the query log; ERROR rows are harness/server
+failures, excluded from the headline loop count.
+
+Brave's free tier is 1 query/sec: the harness throttles every live
+attempt (failures included), retries a 429 once with backoff, and caches
+successful queries for the whole run (deterministic filler means repeat
+sessions re-ask the same queries). Case prompts transfer unchanged from
+the text battery sets (the cybergym set is the natural fit - CVE
+research, protocol audits).
 
 ## Interpreting results
 
@@ -92,5 +124,3 @@ yet; the case prompts above transfer unchanged.
   a local quant, an API model, or a before/after pair (base vs capped) to
   measure whether an intervention (finetune, requant, ThinkingCap-style
   termination training) reduces looping.
-
-License: same as the repository.
