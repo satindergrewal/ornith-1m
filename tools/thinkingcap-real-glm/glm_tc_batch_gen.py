@@ -145,14 +145,32 @@ def main():
     t_start = time.time()
     step_times = []
     total_new = 0
+    # bound the packed size of ONE forward: unbounded packs (all active
+    # rows in a single pass) OOM'd the 4-way regen at ~70k tokens when
+    # 900+ long rows were in flight; chunk instead (engine handles
+    # cu_seqlens row isolation per chunk identically)
+    MAX_PACK_TOKENS = int(os.environ.get("TC_MAX_PACK_TOKENS", "32768"))
     for step in range(a.max_new):
         t0 = time.time()
         act = [r for r in seqs if not r["done"]]
         if not act:
             break
-        logits = eng.forward_batch([r["ids"] for r in act])
-        probs_cpu = torch.softmax(logits.float().cpu() / TEMP, -1)
-        nxt = torch.multinomial(probs_cpu, 1, generator=g).squeeze(1).tolist()
+        chunks, cur, cur_tok = [], [], 0
+        for r in act:
+            rl = len(r["ids"])
+            if cur and cur_tok + rl > MAX_PACK_TOKENS:
+                chunks.append(cur)
+                cur, cur_tok = [], 0
+            cur.append(r)
+            cur_tok += rl
+        if cur:
+            chunks.append(cur)
+        nxt = []
+        for ch in chunks:
+            logits = eng.forward_batch([r["ids"] for r in ch])
+            probs_cpu = torch.softmax(logits.float().cpu() / TEMP, -1)
+            nxt += torch.multinomial(probs_cpu, 1, generator=g) \
+                .squeeze(1).tolist()
         for r, t in zip(act, nxt):
             r["ids"].append(int(t))
             r["new"].append(int(t))
