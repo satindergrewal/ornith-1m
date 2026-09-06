@@ -256,7 +256,7 @@ class Dsv4CaptureView:
         self.layer = layer
         manifest = load_json(self.root / "capture-manifest.json")
         verify_seal(manifest, schema=DSV4_CAPTURE_SCHEMA,
-                    field="capture_sha256")
+                    field="capture_sha256", label="capture manifest")
         geom = manifest.get("geometry", {})
         if (manifest.get("layers") != list(MAIN_LAYERS)
                 or geom.get("hidden_size") != HIDDEN_SIZE
