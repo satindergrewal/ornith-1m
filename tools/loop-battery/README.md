@@ -44,6 +44,34 @@ abliteration-boundary prompt (a stock model hedges or refuses it; an
 abliterated model engages - deep reasoning under the refusal-direction
 load). Add your own; cases are plain JSONL.
 
+`cases-cybergym/cases.jsonl` - eight security-research reasoning prompts:
+p2p protocol audit (QUIC mux over iroh/quinn), public CVE root-cause
+chains with detection-first PoCs (Leaky Vessels class), container
+namespace/seccomp boundary tracing, privilege-escalation chain analysis
+from an unprivileged shell, hybrid post-quantum handshake design
+(X25519 + ML-KEM, Noise IK binding), fuzzer crash triage to root cause,
+dependency-resolution supply-chain attacks, and speculative-execution
+side-channel reasoning with detection microbenchmarks. This is the
+daily-workload class for protocol exploit research on p2p codebases:
+sustained multi-hundred-step causal reasoning, which is exactly the
+generation shape that triggers the deep-context attractor. PoC-writing
+prompts are detection-first (auditor tooling for isolated labs), not
+weaponization.
+
+Run a specific set with `--cases cases-cybergym`. For a before/after
+(base vs capped) comparison, run the SAME case set and depths against
+both endpoints and diff the per-case loop rates.
+
+## Roadmap: tool-use battery mode
+
+Plain generation is one failure surface. Deep agentic sessions (the
+real workload) add another: repeated identical tool calls, circular
+search loops, and re-reading the same file forever are the same
+attractor wearing a tool harness. Planned second mode: give the model a
+small tool set (web search, file read) and detect loop signatures in
+the TOOL-CALL sequence, same detection math on call n-grams. Not built
+yet; the case prompts above transfer unchanged.
+
 ## Interpreting results
 
 - `loop: true` on any generation at a depth = the artifact loops at that
