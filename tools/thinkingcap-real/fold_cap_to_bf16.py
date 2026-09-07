@@ -34,6 +34,10 @@ def main():
     ap.add_argument("--lora", default="/wd/cap/lora.safetensors")
     ap.add_argument("--out", default="/workspace/model-capped-bf16")
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--shards", default=None,
+                    help="1-based inclusive range 'FIRST-LAST' of shards "
+                         "to process (for multi-GPU striding; markers keep "
+                         "concurrent workers disjoint)")
     args = ap.parse_args()
 
     from safetensors.torch import load_file
@@ -51,6 +55,7 @@ def main():
         raise SystemExit(f"[fold] ABORT unpaired A/B keys: {unpaired[:5]}")
     if not lora:
         raise SystemExit("[fold] ABORT: no LoRA sites parsed")
+    lora = {k: (v["A"], v["B"]) for k, v in lora.items()}
     print(f"[fold] {len(lora)} adapter sites, scale {SCALE}", flush=True)
 
     L = StreamingDSV4(device=args.device)
@@ -69,6 +74,11 @@ def main():
         by_shard.setdefault(shard, []).append((name, dt))
     shards_sorted = sorted(by_shard, key=lambda s: int(
         "".join(c for c in s if c.isdigit()) or 0))
+    if args.shards:
+        lo, hi = (int(x) for x in args.shards.split("-"))
+        shards_sorted = shards_sorted[lo - 1:hi]
+        print(f"[fold] shard range {lo}-{hi} ({len(shards_sorted)} shards)",
+              flush=True)
 
     receipts = {"scale": SCALE, "sites": {}, "dtype_census": {},
                 "shards": len(shards_sorted)}
@@ -133,6 +143,11 @@ def main():
         torch.cuda.empty_cache()
         print(f"[fold] shard {si+1}/{len(shards_sorted)} ({shard}) written, "
               f"{time.time()-t0:.0f}s", flush=True)
+
+    if args.shards:
+        print(f"[fold] range complete; finalizer skipped "
+              f"(full-range run writes index/receipts)", flush=True)
+        return
 
     missing = sorted(set(lora) - folded)
     if missing:

@@ -19,6 +19,7 @@ overthink (the holdout mean was 43 tokens; nothing to trim there).
 
 import argparse
 import json
+import os
 import random
 import re
 import time
